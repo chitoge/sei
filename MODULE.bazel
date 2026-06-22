@@ -1,0 +1,26 @@
+"""SEI — Bazel module wiring the Lean toolchain via rules_lean4 (remote-exec capable).
+
+The Lean toolchain is hermetic and pinned by checksum by rules_lean4; the actual
+build/elaboration actions run on remote execution (BuildBuddy) per ~/.bazelrc.
+"""
+
+module(name = "sei", version = "0.0.0")
+
+bazel_dep(name = "rules_lean4", version = "0.2.0")
+
+# rules_lean4 is not in the Bazel Central Registry; pin by commit.
+git_override(
+    module_name = "rules_lean4",
+    remote = "https://github.com/chitoge/rules_lean4.git",
+    commit = "15e28082e3d35ea772efd5cb8ddda3aa11d7a434",
+)
+
+bazel_dep(name = "platforms", version = "0.0.10")  # rbe_linux_x86_64 constraints
+bazel_dep(name = "bazel_skylib", version = "1.7.1")  # build_test (proof checking)
+bazel_dep(name = "rules_shell", version = "0.5.0")  # sh_test (E09 equivalence diff)
+
+lean = use_extension("@rules_lean4//lean:extensions.bzl", "lean")
+lean.toolchain(version = "4.31.0")  # matches //:lean-toolchain
+use_repo(lean, "lean_toolchains")
+
+register_toolchains("@lean_toolchains//:all")

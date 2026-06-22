@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.9.1
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.sha }}
+          repository-cache: true
+
+      # MODULE.bazel uses git_override for rules_lean4; Bazel fetches it
+      # automatically. The project .bazelrc pins --platforms=//:rbe_linux_x86_64
+      # (linux/x86_64), which matches this runner. No remote executor is
+      # configured, so actions run locally.
+      - name: Test
+        run: bazel test //:all --test_output=errors

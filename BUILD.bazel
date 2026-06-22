@@ -1,0 +1,781 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_lean4//lean:defs.bzl", "lean_binary", "lean_library", "lean_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+"""Root package: the remote execution platform.
+
+The local host is aarch64 but the BuildBuddy remote workers are linux/x86_64.
+Without an x86_64 execution platform, rules_lean4 selects the aarch64 Lean
+tarball and the worker rejects it ("Exec format error"). Declaring this platform
+(and pointing --extra_execution_platforms/--platforms at it in .bazelrc) makes
+toolchain resolution pick the linux-x86_64 Lean toolchain that runs on RBE.
+"""
+
+platform(
+    name = "rbe_linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    exec_properties = {
+        "OSFamily": "Linux",
+        "Arch": "amd64",
+        # The default BuildBuddy executor image is too old (glibc < 2.29) for the
+        # Lean toolchain's bundled clang/LLVM. Pin a modern RBE image.
+        "container-image": "docker://gcr.io/flame-public/rbe-ubuntu20-04:latest",
+    },
+)
+
+# Descriptor artifacts consumed by Lean ingestion and vector-check tests.
+exports_files(glob([
+    "tests/fixtures/**/*.json",
+    "tests/**/*.json",
+]))
+
+
+# --- E10: machine-checked proofs --------------------------------------------
+# Building this library elaborates every proof; elaboration fails if any proof
+# is wrong, so a successful build IS the proof check.
+lean_library(
+    name = "proofs",
+    srcs = [
+        "Sei/Bus.lean",
+        "Sei/Device.lean",
+        "Sei/Endian.lean",
+        "Sei/Equiv.lean",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+build_test(
+    name = "proofs_test",
+    targets = [":proofs"],
+)
+
+# Proofs ABOUT the executable core (imports Sei.Core).
+lean_library(
+    name = "core_proofs",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/CoreProofs.lean",
+    ],
+)
+
+build_test(
+    name = "core_proofs_test",
+    targets = [":core_proofs"],
+)
+
+# --- FM-friendly semantic core (Lean) ---------------------------------------
+lean_library(
+    name = "core",
+    srcs = ["Sei/Core.lean"],
+    visibility = ["//visibility:public"],
+)
+
+lean_test(
+    name = "core_smoke_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/CoreSmoke.lean",
+    ],
+)
+
+lean_test(
+    name = "toy_exp_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/Drivers/ToyExp.lean",
+    ],
+)
+
+lean_test(
+    name = "arm_exp_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ArmExp.lean",
+    ],
+)
+
+lean_test(
+    name = "mips_exp_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/MipsExp.lean",
+    ],
+)
+
+lean_test(
+    name = "device_exp_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/DeviceExp.lean",
+    ],
+)
+
+# --- toolchain sanity target ------------------------------------------------
+lean_library(
+    name = "smoke",
+    srcs = ["Sei/Smoke.lean"],
+)
+
+build_test(
+    name = "smoke_test",
+    targets = [":smoke"],
+)
+
+# --- E09: pure-Lean differential equivalence (no Python) --------------------
+# Core-backed toy (Sei.Isa.Toy over the real Machine/bus/typed Effect) vs an
+# independent Nat-based backend (Sei.Isa.ToyAlt). The test asserts their
+# canonical event logs are identical.
+lean_test(
+    name = "toy_equiv_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/Isa/ToyAlt.lean",
+        "Sei/Drivers/ToyEquiv.lean",
+    ],
+)
+
+
+# --- N1: hardware-entry descriptor ingestion (E00/E06 in Lean) --------------
+_DESCRIPTORS = [
+    "//:tests/fixtures/toy-machine.sei.json",
+    "//:tests/fixtures/classic-arm-be.sei.json",
+]
+
+lean_binary(
+    name = "hw_exp",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Drivers/HwExp.lean",
+    ],
+)
+
+sh_test(
+    name = "hw_exp_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :hw_exp)"] + ["$(rootpath %s)" % d for d in _DESCRIPTORS],
+    data = [":hw_exp"] + _DESCRIPTORS,
+)
+
+# Descriptor-driven CPU bring-up: descriptor + firmware image → run ARM from
+# reset_pc, reproducing the E02 signals through the descriptor path.
+lean_test(
+    name = "hw_bringup_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/HwBringup.lean",
+    ],
+)
+
+# --- E06: producer adapter (shadowrealm model -> descriptor) in Lean --------
+lean_test(
+    name = "adapter_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Hw/Adapter.lean",
+        "Sei/Drivers/AdapterExp.lean",
+    ],
+)
+
+# MIPS descriptor-driven bring-up (E05 signals via the descriptor path).
+lean_test(
+    name = "mips_bringup_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/MipsBringup.lean",
+    ],
+)
+
+# --- Sei.IR: typed effect IR + toy lowering + direct/IR equivalence ---------
+lean_test(
+    name = "ir_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/IR.lean",
+        "Sei/Drivers/IRExp.lean",
+    ],
+)
+
+# --- Fidelity substrate: event classification (E13) + enforcement (E14) -----
+lean_test(
+    name = "fidelity_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/Fidelity.lean",
+        "Sei/Drivers/FidelityExp.lean",
+    ],
+)
+
+# --- E20: register-source ingestion + access-policy proofs ------------------
+lean_test(
+    name = "reg_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Hw/RegisterIR.lean",
+        "Sei/Drivers/RegExp.lean",
+    ],
+)
+
+# --- E21: topology-source ingestion -----------------------------------------
+lean_test(
+    name = "topo_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Hw/Adapter.lean",
+        "Sei/Hw/Topology.lean",
+        "Sei/Drivers/TopoExp.lean",
+    ],
+)
+
+# --- E22: raw P-code -> SEI IR slice -----------------------------------------
+lean_test(
+    name = "pcode_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/IR.lean",
+        "Sei/Hw/Pcode.lean",
+        "Sei/Drivers/PcodeExp.lean",
+    ],
+)
+
+# --- E23: trace/HIL -> observational (traceReplay) model --------------------
+lean_test(
+    name = "trace_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/TraceExp.lean",
+    ],
+)
+
+# --- E18: external / co-sim boundary lane -----------------------------------
+lean_test(
+    name = "external_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/ExternalExp.lean",
+    ],
+)
+
+# --- E19: multi-source import smoke (register + topology + p-code) ----------
+lean_test(
+    name = "multi_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Hw/Adapter.lean",
+        "Sei/Hw/RegisterIR.lean",
+        "Sei/Hw/Topology.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/IR.lean",
+        "Sei/Hw/Pcode.lean",
+        "Sei/Drivers/MultiExp.lean",
+    ],
+)
+
+# --- N4: MIPS branch-delay-slot exception fidelity --------------------------
+lean_test(
+    name = "mips_bd_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/MipsBdExp.lean",
+    ],
+)
+
+# --- N4: MIPS TLBWI / TLB-write fidelity ------------------------------------
+lean_test(
+    name = "mips_tlb_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/MipsTlbExp.lean",
+    ],
+)
+
+# --- MIPS32 differential validation against the Unicorn golden-vector corpus ----
+lean_binary(
+    name = "mips_vec_check",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/MipsVecCheck.lean",
+    ],
+)
+
+sh_test(
+    name = "mips_vec_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :mips_vec_check)",
+        "$(rootpath //:tests/mipsvec/mips32-vectors.json)",
+    ],
+    data = [
+        ":mips_vec_check",
+        "//:tests/mipsvec/mips32-vectors.json",
+    ],
+)
+
+# Local native execution platform (aarch64 host) — used when RBE is unavailable
+# so rules_lean4 selects the aarch64 Lean toolchain and builds natively.
+platform(
+    name = "local_host",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+# --- N4: ARM banked r13/r14 fidelity ----------------------------------------
+lean_test(
+    name = "arm_bank_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ArmBankExp.lean",
+    ],
+)
+
+# --- lean-descriptor-ir audit finding 6: DDR controller readiness gate ------
+lean_test(
+    name = "ddr_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/DdrExp.lean",
+    ],
+)
+
+# --- N4: ARM CPSR T-bit / BX interworking -----------------------------------
+lean_test(
+    name = "arm_thumb_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ArmThumbExp.lean",
+    ],
+)
+
+# --- audit (new): store-fault propagation across Toy/IR/MIPS ----------------
+lean_test(
+    name = "store_fault_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/IR.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Hw/Pcode.lean",
+        "Sei/Drivers/StoreFaultExp.lean",
+    ],
+)
+
+# --- audit (flash): flash controller smoke ----------------------------------
+lean_test(
+    name = "flash_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Drivers/FlashExp.lean",
+    ],
+)
+
+# --- L1+L2 (large use case): firmware intake -> descriptor -> bounded runner -
+lean_test(
+    name = "rehost_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Hw/Adapter.lean",
+        "Sei/Hw/Intake.lean",
+        "Sei/Hw/Runner.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Isa/Mips.lean",
+        "Sei/Drivers/RehostExp.lean",
+    ],
+)
+
+# --- L3 (large use case): frontier -> device-hypothesis synthesis loop -------
+lean_test(
+    name = "frontier_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Isa/Toy.lean",
+        "Sei/Hw/Frontier.lean",
+        "Sei/Drivers/FrontierExp.lean",
+    ],
+)
+
+# --- L4 (large use case): controller-first platform models -------------------
+lean_test(
+    name = "controller_test",
+    size = "small",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Hw/Descriptor.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ControllerExp.lean",
+    ],
+)
+
+# --- L6 (large use case): Unicorn-like API surface + CLI ---------------------
+_API_SRCS = [
+    "Sei/Core.lean",
+    "Sei/Hw/Adapter.lean",
+    "Sei/Hw/Descriptor.lean",
+    "Sei/Hw/Intake.lean",
+    "Sei/Hw/Runner.lean",
+    "Sei/Hw/Frontier.lean",
+    "Sei/Hw/Checkpoint.lean",
+    "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+    "Sei/Isa/Mips.lean",
+    "Sei/Api.lean",
+]
+
+lean_test(
+    name = "api_test",
+    size = "small",
+    srcs = _API_SRCS + ["Sei/Drivers/ApiExp.lean"],
+)
+
+lean_binary(
+    name = "sei_cli",
+    srcs = _API_SRCS + ["Sei/Drivers/SeiCli.lean"],
+)
+
+sh_test(
+    name = "cli_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :sei_cli)",
+        "$(rootpath //:tests/fixtures/cli-demo.sei.json)",
+        "--fuel",
+        "50",
+    ],
+    data = [
+        ":sei_cli",
+        "//:tests/fixtures/cli-demo.sei.json",
+    ],
+)
+
+# --- L7 (large use case): promotion & regression discipline ------------------
+lean_test(
+    name = "promotion_test",
+    size = "small",
+    srcs = _API_SRCS + [
+        "Sei/Hw/Promotion.lean",
+        "Sei/Drivers/PromotionExp.lean",
+    ],
+)
+
+
+# --- A32 differential validation against the Unicorn golden-vector corpus -----
+lean_binary(
+    name = "arm_vec_check",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ArmVecCheck.lean",
+    ],
+)
+
+lean_binary(
+    name = "thumb_vec_check",
+    srcs = [
+        "Sei/Core.lean",
+        "Sei/Float.lean",
+        "Sei/Simd.lean",
+        "Sei/Isa/Arm.lean",
+        "Sei/Drivers/ThumbVecCheck.lean",
+    ],
+)
+
+sh_test(
+    name = "t32_vec_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :thumb_vec_check)",
+        "$(rootpath //:tests/armvec/t32-vectors.json)",
+    ],
+    data = [
+        ":thumb_vec_check",
+        "//:tests/armvec/t32-vectors.json",
+    ],
+)
+
+sh_test(
+    name = "thumb_vec_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :thumb_vec_check)",
+        "$(rootpath //:tests/armvec/t16-vectors.json)",
+    ],
+    data = [
+        ":thumb_vec_check",
+        "//:tests/armvec/t16-vectors.json",
+    ],
+)
+
+sh_test(
+    name = "arm_vec_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :arm_vec_check)",
+        "$(rootpath //:tests/armvec/a32-dp-vectors.json)",
+    ],
+    data = [
+        ":arm_vec_check",
+        "//:tests/armvec/a32-dp-vectors.json",
+    ],
+)
+
+sh_test(
+    name = "arm_vec_ldst_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = [
+        "$(rootpath :arm_vec_check)",
+        "$(rootpath //:tests/armvec/a32-ldst-vectors.json)",
+    ],
+    data = [
+        ":arm_vec_check",
+        "//:tests/armvec/a32-ldst-vectors.json",
+    ],
+)
+
+sh_test(
+    name = "arm_vec_mul_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-mul-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-mul-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_xldst_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-xldst-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-xldst-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_msr_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-msr-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-msr-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_media_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-media-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-media-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_vfp_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-vfp-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-vfp-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_branch_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-branch-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-branch-vectors.json"],
+)
+
+sh_test(
+    name = "arm_vec_ldm_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-ldm-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-ldm-vectors.json"],
+)
+
+# A32 completeness vs ARM's BSD AARCHMRS encoding index (decoded-correct + fail-closed).
+sh_test(
+    name = "arm_completeness_test",
+    size = "small",
+    srcs = ["run_completeness.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-completeness.json)", "1"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-completeness.json"],
+)
+
+# Soft-float component: standalone IEEE-754 binary32 (no ISA dependency).
+lean_binary(
+    name = "float_check",
+    srcs = ["Sei/Float.lean",
+        "Sei/Simd.lean", "Sei/Drivers/FloatCheck.lean"],
+)
+
+sh_test(
+    name = "float_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :float_check)", "$(rootpath //:tests/float/binary32-vectors.json)"],
+    data = [":float_check", "//:tests/float/binary32-vectors.json"],
+)
+
+sh_test(
+    name = "float64_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :float_check)", "$(rootpath //:tests/float/binary64-vectors.json)"],
+    data = [":float_check", "//:tests/float/binary64-vectors.json"],
+)
+
+sh_test(
+    name = "float_conv_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :float_check)", "$(rootpath //:tests/float/conv-vectors.json)"],
+    data = [":float_check", "//:tests/float/conv-vectors.json"],
+)
+
+sh_test(
+    name = "float_fma_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :float_check)", "$(rootpath //:tests/float/fma-vectors.json)"],
+    data = [":float_check", "//:tests/float/fma-vectors.json"],
+)
+
+sh_test(
+    name = "arm_completeness_frac_test",
+    size = "small",
+    srcs = ["run_completeness.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-completeness-frac.json)", "1"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-completeness-frac.json"],
+)
+
+sh_test(
+    name = "arm_neon_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-neon-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-neon-vectors.json"],
+)
+
+# Native-silicon oracle (AArch64 host): the committed corpora were generated by
+# tools/armgen/native_oracle.c + native_fp_oracle.c running real Advanced SIMD on
+# this Neoverse-N1 host (the host has no AArch32, so it validates the COMPONENT lane
+# math — incl the esize=64 forms Unicorn's JIT SIGILLs on, and FP under FZ+DN).
+# The TEST itself is pure-Lean over the committed JSON, so it runs on RBE.
+sh_test(
+    name = "arm_native64_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-native64-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-native64-vectors.json"],
+)
+sh_test(
+    name = "arm_nativefp_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-nativefp-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-nativefp-vectors.json"],
+)
+
+sh_test(
+    name = "arm_nativefull_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-nativefull-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-nativefull-vectors.json"],
+)
+
+sh_test(
+    name = "arm_nativenarrow_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-nativenarrow-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-nativenarrow-vectors.json"],
+)
+sh_test(
+    name = "arm_neonnarrow_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-narrow-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-narrow-vectors.json"],
+)
+sh_test(
+    name = "arm_narrowsat_test",
+    size = "small",
+    srcs = ["run_hw.sh"],
+    args = ["$(rootpath :arm_vec_check)", "$(rootpath //:tests/armvec/a32-narrow-sat-vectors.json)"],
+    data = [":arm_vec_check", "//:tests/armvec/a32-narrow-sat-vectors.json"],
+)

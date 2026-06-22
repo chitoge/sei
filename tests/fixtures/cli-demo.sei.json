@@ -1,0 +1,12 @@
+{
+  "version": "sei-hw-entry/0",
+  "cpu": { "arch": "arm", "endian": "little" },
+  "entry": { "reset_pc": "0x0", "sp": "0x20000", "exception_state": "none" },
+  "memory": [
+    { "name": "rom", "base": "0x0", "size": "0x10000", "kind": "rom", "perms": "rx" },
+    { "name": "ram", "base": "0x20000", "size": "0x10000", "kind": "ram", "perms": "rw" }
+  ],
+  "mmio": {
+    "default_unknown_policy": { "on_read": "default-value", "value": "0x0", "on_write": "log-drop" }
+  }
+}

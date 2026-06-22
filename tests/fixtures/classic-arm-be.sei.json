@@ -1,0 +1,97 @@
+{
+  "cpu": {
+    "arch": "arm",
+    "endian": "big",
+    "features": [
+      "cp15",
+      "highvecs",
+      "vfp"
+    ],
+    "instr_mode": "arm",
+    "privilege_mode": "svc",
+    "reset_quirks": [
+      "mmu-bypass",
+      "high-vectors"
+    ],
+    "revision": "armv5te"
+  },
+  "devices": [],
+  "entry": {
+    "exception_state": "svc",
+    "reg_overrides": {
+      "r0": "0x0"
+    },
+    "reset_pc": "0xffff0000",
+    "sp": "0x00080000",
+    "vector_base": "0xffff0000"
+  },
+  "irq_time": {
+    "clock_source": "unknown",
+    "controller": "classic-arm-irq",
+    "reset_lines": [
+      "nreset"
+    ],
+    "scheduling_mode": "deterministic",
+    "timer_source": "unknown"
+  },
+  "memory": [
+    {
+      "base": "0x0",
+      "image": "main.bin",
+      "kind": "rom",
+      "load_offset": "0x0",
+      "name": "rom",
+      "perms": "rx",
+      "provenance": "synthetic",
+      "size": "0x00080000"
+    },
+    {
+      "base": "0x00080000",
+      "kind": "ram",
+      "name": "ram",
+      "perms": "rwx",
+      "provenance": "synthetic",
+      "size": "0x00080000"
+    },
+    {
+      "alias_of": "rom",
+      "base": "0xffff0000",
+      "kind": "alias",
+      "name": "highvec",
+      "perms": "rx",
+      "provenance": "synthetic high-vector alias",
+      "size": "0x1000"
+    }
+  ],
+  "mmio": {
+    "default_unknown_policy": {
+      "on_read": "default-value",
+      "on_write": "log-drop",
+      "value": "0x0"
+    },
+    "windows": []
+  },
+  "provenance": {
+    "confidence": 0.9,
+    "notes": "classic ARM BE entry shape; image bound by E02/E06",
+    "source": "synthetic"
+  },
+  "trace_snapshot": {
+    "snapshot_labels": [
+      "reset"
+    ],
+    "trace_channels": [
+      "exec",
+      "cp15",
+      "mem_read",
+      "mem_write",
+      "unknown_mmio_read",
+      "exception"
+    ],
+    "validation_goals": [
+      "high-vector reset",
+      "BE memory"
+    ]
+  },
+  "version": "sei-hw-entry/0"
+}

@@ -1,0 +1,11 @@
+# SEI Bazel config. Remote execution + cache come from the user ~/.bazelrc
+# (BuildBuddy). The local host is aarch64; BuildBuddy workers are linux/x86_64,
+# so force the x86_64 execution + target platform (see //:rbe_linux_x86_64).
+common --check_direct_dependencies=off
+build --extra_execution_platforms=//:rbe_linux_x86_64
+build --platforms=//:rbe_linux_x86_64
+
+# RBE fallback: native aarch64 execution when BuildBuddy is unavailable.
+#   bazel test //:all --config=local
+build:local --extra_execution_platforms=//:local_host
+build:local --platforms=//:local_host

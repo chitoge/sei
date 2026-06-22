@@ -1,0 +1,129 @@
+{
+  "cpu": {
+    "arch": "toy32",
+    "endian": "little",
+    "features": [],
+    "instr_mode": "toy",
+    "privilege_mode": "machine",
+    "reset_quirks": [],
+    "revision": "v0"
+  },
+  "devices": [
+    {
+      "base": "0x40000000",
+      "name": "timer0",
+      "provenance": "hand-authored",
+      "schema": {
+        "registers": [
+          {
+            "fields": [
+              {
+                "access": "rw",
+                "bits": "0",
+                "name": "EN"
+              }
+            ],
+            "name": "CTRL",
+            "offset": "0x0",
+            "reset": "0x0",
+            "width": 32
+          },
+          {
+            "name": "VAL",
+            "offset": "0x4",
+            "reset": "0x0",
+            "width": 32
+          }
+        ]
+      },
+      "size": "0x100",
+      "type": "timer"
+    }
+  ],
+  "entry": {
+    "exception_state": "none",
+    "reg_overrides": {},
+    "reset_pc": "0x0",
+    "sp": "0x1f00",
+    "vector_base": "0x0"
+  },
+  "irq_time": {
+    "clock_source": "sysclk",
+    "controller": "toy-pic",
+    "reset_lines": [
+      "nreset"
+    ],
+    "scheduling_mode": "deterministic",
+    "timer_source": "timer0"
+  },
+  "memory": [
+    {
+      "base": "0x0",
+      "kind": "rom",
+      "name": "rom",
+      "perms": "rx",
+      "provenance": "hand-authored",
+      "size": "0x1000"
+    },
+    {
+      "base": "0x1000",
+      "kind": "ram",
+      "name": "ram",
+      "perms": "rw",
+      "provenance": "hand-authored",
+      "size": "0x1000"
+    },
+    {
+      "alias_of": "rom",
+      "base": "0x8000",
+      "kind": "alias",
+      "name": "rom_alias",
+      "perms": "rx",
+      "provenance": "hand-authored",
+      "size": "0x1000"
+    }
+  ],
+  "mmio": {
+    "default_unknown_policy": {
+      "on_read": "default-value",
+      "on_write": "log-drop",
+      "value": "0x0"
+    },
+    "windows": [
+      {
+        "base": "0x40000000",
+        "name": "timer0",
+        "side_effect_policy": "modeled",
+        "size": "0x100",
+        "widths": [
+          32
+        ]
+      }
+    ]
+  },
+  "provenance": {
+    "confidence": 1.0,
+    "notes": "minimal toy descriptor for E00",
+    "source": "hand-authored"
+  },
+  "trace_snapshot": {
+    "snapshot_labels": [
+      "reset",
+      "post-init"
+    ],
+    "trace_channels": [
+      "exec",
+      "mem_read",
+      "mem_write",
+      "mmio_read",
+      "mmio_write",
+      "irq",
+      "timer"
+    ],
+    "validation_goals": [
+      "empty machine instantiates",
+      "round-trip stable"
+    ]
+  },
+  "version": "sei-hw-entry/0"
+}
