@@ -94,3 +94,8 @@ No system Lean installation needed — the build pins its own toolchain via
 - [Descriptor format](docs/descriptor.md) — the full `.sei.json` field reference
 - [ISA coverage](docs/isa.md) — instruction tables and test corpus details
 - [Lean API](docs/api.md) — driving SEI from Lean code, trace queries, proofs
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
+

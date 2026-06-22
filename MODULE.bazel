@@ -12,7 +12,7 @@ bazel_dep(name = "rules_lean4", version = "0.2.0")
 git_override(
     module_name = "rules_lean4",
     remote = "https://github.com/chitoge/rules_lean4.git",
-    commit = "15e28082e3d35ea772efd5cb8ddda3aa11d7a434",
+    tag = "v0.2.0",
 )
 
 bazel_dep(name = "platforms", version = "0.0.10")  # rbe_linux_x86_64 constraints
